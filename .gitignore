@@ -1,0 +1,15 @@
+# GSD Framework
+.planning/
+get-shit-done/
+node_modules/
+.claude
+.gemini
+.github
+agents/
+gsd-file-manifest.json
+
+#por mientras
+
+adf.py
+
+

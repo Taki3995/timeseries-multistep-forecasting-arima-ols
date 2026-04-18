@@ -1,0 +1,43 @@
+# GSD — Get Shit Done
+
+- GSD workflows live in `get-shit-done/workflows/`. Load the relevant workflow when
+  the user runs a `/gsd-*` command.
+- GSD agents live in `agents/`. Use the matching agent when spawning subagents.
+- GSD tools are at `get-shit-done/bin/gsd-tools.cjs`. Run with `node`.
+- Planning artifacts live in `.planning/`. Never edit them outside a GSD workflow.
+- Do not apply GSD workflows unless the user explicitly asks for them.
+- When a GSD command triggers a deliverable (feature, fix, docs), offer the next
+  step to the user using Cline's ask_user tool after completing it.
+
+# Reglas Estrictas de Programación - Taller 2
+
+## Restricciones de Librerías
+
+- PERMITIDAS: python, numpy, pandas, matplotlib.
+- PROHIBIDAS: statsmodels, scikit-learn, scipy.stats.
+- PROHIBIDO usar `numpy.linalg.pinv`. Es OBLIGATORIO usar `pinv_svd(A)` implementado manualmente con SVD.
+
+## Estructura de Archivos Obligatoria
+
+- `adf.py`: Test de Dickey-Fuller Aumentado.
+- `trn.py`: Entrenamiento y estimación Two-Phase OLS.
+- `tst.py`: Evaluación y predicción Multi-step-ahead.
+- `utility.py`: Funciones auxiliares (SVD, métricas, recuperación).
+
+## Fórmulas Maestras
+
+- Multi-step Prediction: $\hat{Y}_{t+h}=\hat{z}_{t+h}-\sum_{k=1}^{d}(-1)^{k}\binom{d}{k}Y_{t+h-k}$.
+- Jarque-Bera: $JB=\frac{n}{6}(S^{2}+\frac{(K-3)^{2}}{4})$
+- Recuperación Newton: $\hat{Y}_{T+h}=Recuperar(\hat{y}_{T+h},\Delta^{d-1}Y_{T},...,Y_{T})$.
+
+## Metodología de Trabajo
+
+1. Usar `read_file` con `start_line` y `end_line` para archivos largos.
+2. Seguir ciclo GSD: Spec -> Plan -> Execute -> Verify.
+
+# PROTOCOLO DE AISLAMIENTO TOTAL
+
+- PROHIBIDO: Consultar, leer o actualizar el `engram`.
+- FUENTES EXCLUSIVAS: Solo se permite el uso de información contenida en el directorio actual y en este archivo `.clinerules`.
+- OBJETIVO: Cumplir estrictamente con los requerimientos.
+- RESTRICCIÓN DE LIBRERÍAS: Solo Python, numpy, pandas y matplotlib. No usar librerías de alto nivel.
