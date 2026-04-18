@@ -7,3 +7,5 @@ node_modules/
 .github
 agents/
 gsd-file-manifest.json
+
+#!*
