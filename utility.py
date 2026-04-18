@@ -1,7 +1,7 @@
 import numpy as np
 
 def pinv_svd(A, tol=1e-15):
-    """
+    r"""
     Calcula la pseudo-inversa de Moore-Penrose usando SVD.
     A^+ = V_h^T \cdot diag(1/S) \cdot U^T
     """

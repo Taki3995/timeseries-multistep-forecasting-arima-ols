@@ -7,5 +7,6 @@ node_modules/
 .github
 agents/
 gsd-file-manifest.json
+__pycache__
 
 #!*
