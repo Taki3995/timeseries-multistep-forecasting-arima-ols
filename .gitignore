@@ -8,5 +8,6 @@ node_modules/
 agents/
 gsd-file-manifest.json
 __pycache__
+prediccion.png
 
 #!*
