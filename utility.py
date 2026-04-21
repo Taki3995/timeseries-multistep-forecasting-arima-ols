@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 def pinv_svd(A, tol=1e-15):
     r"""
@@ -105,3 +106,24 @@ def recover_prediction(y_hat_diff, hist_Y, d):
         Y_pred -= signo * coef_binomial * y_val
         
     return Y_pred
+
+def export_csv_partial(data, columns, filepath):
+    """
+    Función auxiliar para exportar datos a CSV con columnas específicas.
+    
+    Parámetros:
+    - data: lista de diccionarios o DataFrame
+    - columns: lista de nombres de columnas
+    - filepath: ruta de archivo de salida
+    """
+    if isinstance(data, list):
+        df = pd.DataFrame(data)
+    else:
+        df = data
+    
+    # Seleccionar solo columnas especificadas
+    if columns:
+        df = df[columns]
+    
+    df.to_csv(filepath, index=False)
+    return df

@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from utility import pinv_svd
 
 def estimate_residuals(y, m=20):
@@ -17,7 +18,7 @@ def estimate_residuals(y, m=20):
     
     # Matriz X: constante + m rezagos
     X = np.zeros((n_obs, 1 + m))
-    X[:, 0] = 1.0 # Intersección
+    X[:, 0] = 1.0  # Intersección
     
     for i in range(1, m + 1):
         # y_{t-i}
@@ -42,7 +43,7 @@ def estimate_two_phase_model(y, eps_hat, p, q, H):
     Usa p rezagos autorregresivos y q rezagos de media móvil (usando eps_hat).
     """
     n = len(y)
-    models = {} # Guardaremos los coeficientes por horizonte h
+    models = {}  # Guardaremos los coeficientes por horizonte h
     
     # El máximo rezago necesario para tener datos completos en cada fila de atributos
     max_lag = max(p, q)
@@ -50,11 +51,11 @@ def estimate_two_phase_model(y, eps_hat, p, q, H):
     # Iteramos sobre cada paso
     for h in range(1, H + 1):
         # Para predecir Y_{t+h}, necesitamos conocer Y y eps en t, t-1,...
-        # El tiempo "t" disponible comienza en max_lag (para poder mirar hacia atrás max_lag steps, es decir t-max_lag >= 0).
+        # El tiempo "t" disponible comienza en max_lag (para poder mirar hacia atrás max_lag steps)
         # Además, como el target es t+h, t no puede exceder n - 1 - h (para que t+h <= n-1).
         
         t_start = max_lag
-        t_end = n - h # para que el slice max de t sea n - h - 1, y Y target sea hasta n-1
+        t_end = n - h  # para que el slice max de t sea n - h - 1, y Y target sea hasta n-1
         
         if t_end <= t_start:
             raise ValueError(f"No hay suficientes datos para el horizonte {h} con lags p={p}, q={q}.")
@@ -66,7 +67,7 @@ def estimate_two_phase_model(y, eps_hat, p, q, H):
         
         # Diseñar Matriz X
         X = np.zeros((n_obs, 1 + p + q))
-        X[:, 0] = 1.0 # Intersección
+        X[:, 0] = 1.0  # Intersección
         
         # Rezagos AR de 'y': y_t, y_{t-1}, ... y_{t-p+1}
         for i in range(p):
@@ -78,43 +79,55 @@ def estimate_two_phase_model(y, eps_hat, p, q, H):
             
         # Estimación OLS
         theta_h = pinv_svd(X) @ Y_target
-        models[h] = theta_h
+        
+        # Calcular métricas
+        Y_pred = X @ theta_h
+        residuals = Y_target - Y_pred
+        sse = np.sum(residuals**2)
+        aic = n_obs * np.log(sse) + 2 * (1 + p + q)
+        
+        models[h] = {
+            'theta': theta_h,
+            'sse': sse,
+            'aic': aic
+        }
         
     return models
 
-def grid_search_arima(y, p_max, q_max, H, m=20):
+def grid_search_arima(y_train, p_max, q_max, H, m=20):
     """
     Búsqueda grid de (p, q) minimizando el AIC del modelo OLS para h=1.
+    Realizado EXCLUSIVAMENTE sobre el conjunto de ENTRENAMIENTO.
     """
-    eps_hat = estimate_residuals(y, m)
+    eps_hat = estimate_residuals(y_train, m)
     
     best_aic = float('inf')
     best_p = 0
     best_q = 0
     best_models = None
     
-    n = len(y)
+    n = len(y_train)
     
     for p in range(1, p_max + 1):
         for q in range(q_max + 1):
             max_lag_pq = max(p, q)
-            h = 1 # Evaluaremos AIC usando solo predecir 1 paso adelante para decidir la estructura (p,q)
+            h = 1  # Evaluaremos AIC usando solo predecir 1 paso adelante
             
             t_start = max_lag_pq
             t_end = n - h
             
             if t_end <= t_start:
-                continue # Evitar configuraciones sin datos suficientes
+                continue  # Evitar configuraciones sin datos suficientes
                 
             n_obs = t_end - t_start
             
             # Matriz X para h=1
-            Y_target = y[t_start + h : t_end + h]
+            Y_target = y_train[t_start + h : t_end + h]
             X = np.zeros((n_obs, 1 + p + q))
             X[:, 0] = 1.0
             
             for i in range(p):
-                X[:, 1 + i] = y[t_start - i : t_end - i]
+                X[:, 1 + i] = y_train[t_start - i : t_end - i]
             for j in range(q):
                 X[:, 1 + p + j] = eps_hat[t_start - j : t_end - j]
                 
@@ -123,11 +136,10 @@ def grid_search_arima(y, p_max, q_max, H, m=20):
             
             sse = np.sum((Y_target - Y_pred)**2)
             
-            if sse <= 0: # Evitar log(0)
+            if sse <= 0:  # Evitar log(0)
                 continue
                 
             # AIC = n * ln(SSE) + 2(p + q + 1)
-            # Aunque la versión estricta usa (SSE/n_obs), esto es equivalente para optimizar
             aic = n_obs * np.log(sse) + 2 * (1 + p + q)
             
             if aic < best_aic:
@@ -136,20 +148,81 @@ def grid_search_arima(y, p_max, q_max, H, m=20):
                 best_q = q
                 
     # Una vez encontrados los mejores p, q, entrenamos para todos los h
-    best_models = estimate_two_phase_model(y, eps_hat, best_p, best_q, H)
+    best_models = estimate_two_phase_model(y_train, eps_hat, best_p, best_q, H)
     
-    return best_p, best_q, best_models, eps_hat
+    return best_p, best_q, best_models, eps_hat, best_aic
+
+def export_train_results(p, q, models, filepath='train.csv'):
+    """
+    Exporta coeficientes y métricas del entrenamiento a CSV.
+    Formato: h, p, q, coeficientes (space-separated), SSE, AIC
+    """
+    rows = []
+    for h, model_data in sorted(models.items()):
+        theta = model_data['theta']
+        sse = model_data['sse']
+        aic = model_data['aic']
+        
+        # Convertir coeficientes a string
+        coef_str = ' '.join([f'{c:.6f}' for c in theta])
+        
+        rows.append({
+            'h': h,
+            'p': p,
+            'q': q,
+            'coeficientes': coef_str,
+            'SSE': sse,
+            'AIC': aic
+        })
+    
+    df = pd.DataFrame(rows)
+    df.to_csv(filepath, index=False)
+    print(f"Resultados de entrenamiento exportados a {filepath}")
+    return df
 
 def train_model(y, p_max=5, q_max=5, H=12, m=20):
     """
-    Función principal de entrenamiento. Delega en GridSearchCV para obtener el mejor (p,q).
+    Función principal de entrenamiento con split 80/20 cronológico.
+    RESTRICCIÓN: Fase 1 y 2 se aplican EXCLUSIVAMENTE sobre el conjunto TRAIN.
     """
     y = np.asarray(y, dtype=float)
-    best_p, best_q, models, residuals = grid_search_arima(y, p_max, q_max, H, m)
+    n = len(y)
+    
+    # Split cronológico 80/20
+    n_train = int(0.8 * n)
+    y_train = y[:n_train]
+    y_test = y[n_train:]
+    
+    print(f"Split Train/Test: {n_train} train (80%), {len(y_test)} test (20%)")
+    
+    # Grid search y estimación EXCLUSIVAMENTE sobre TRAIN
+    best_p, best_q, models, residuals, best_aic = grid_search_arima(
+        y_train, p_max, q_max, H, m
+    )
+    
+    print(f"Mejores parámetros encontrados: p={best_p}, q={best_q}, AIC={best_aic:.4f}")
+    
+    # Exportar resultados de entrenamiento
+    export_train_results(best_p, best_q, models, 'train.csv')
     
     return {
         'p': best_p,
         'q': best_q,
-        'models': models, # dictionary of h: theta_h
-        'residuals': residuals
+        'models': models,
+        'residuals': residuals,
+        'y_train': y_train,
+        'y_test': y_test,
+        'n_train': n_train,
+        'H': H,
+        'm': m
     }
+
+if __name__ == '__main__':
+    # Cargar datos
+    try:
+        data = pd.read_csv('tseries.csv', header=None)
+        y = data.values.flatten().astype(float)
+        train_result = train_model(y, p_max=5, q_max=5, H=12, m=20)
+        print("Entrenamiento completado.")
+    except FileNotFoundError:
+        print("Error: No se encontró tseries.csv")
