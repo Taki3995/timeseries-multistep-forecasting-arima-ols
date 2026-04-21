@@ -127,3 +127,37 @@ def export_csv_partial(data, columns, filepath):
     
     df.to_csv(filepath, index=False)
     return df
+
+def read_d_from_adf(filepath='adf.csv'):
+    """
+    Lee el valor óptimo de d desde adf.csv.
+    Retorna el valor de d donde is_stationary == True.
+    Si no existe, retorna 0.
+    """
+    try:
+        df = pd.read_csv(filepath)
+        # Buscar la primera fila donde is_stationary == True
+        stationary_rows = df[df['is_stationary'] == True]
+        if len(stationary_rows) > 0:
+            d_optimal = int(stationary_rows.iloc[0]['d'])
+            return d_optimal
+        else:
+            return 0
+    except FileNotFoundError:
+        print(f"Aviso: {filepath} no encontrado. Usando d=0 por defecto.")
+        return 0
+    except Exception as e:
+        print(f"Error al leer {filepath}: {e}. Usando d=0 por defecto.")
+        return 0
+
+def apply_differencing(y, d):
+    """
+    Aplica diferenciación d veces a la serie y.
+    Retorna la serie diferenciada.
+    """
+    if d <= 0:
+        return y
+    z = y.copy()
+    for _ in range(d):
+        z = np.diff(z)
+    return z

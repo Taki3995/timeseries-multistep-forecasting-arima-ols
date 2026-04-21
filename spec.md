@@ -82,3 +82,5 @@ Cálculo manual de momentos para el estadístico $JB$:
 - **`adf.csv`:** d, estadístico, valor_crítico, estacionario
 - **`train.csv`:** h, p, q, coeficientes, SSE, AIC
 - **`test.csv`:** h, y_real, y_pred, error, mNSE, MAPE, JB
+
+## NO USAR COMENTARIOS. solo dejar el codigo sin ningún tipo de comentario en el

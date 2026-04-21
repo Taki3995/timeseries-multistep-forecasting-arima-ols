@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from utility import pinv_svd
+from utility import pinv_svd, read_d_from_adf, apply_differencing
 
 def estimate_residuals(y, m=20):
     """
@@ -37,41 +37,39 @@ def estimate_residuals(y, m=20):
     
     return residuals
 
-def estimate_two_phase_model(y, eps_hat, p, q, H):
+def estimate_two_phase_model(z, eps_hat, p, q, H):
     """
     Fase 2: Estima un modelo OLS independiente para cada horizonte h in {1 ... H}.
     Usa p rezagos autorregresivos y q rezagos de media móvil (usando eps_hat).
+    Entrena sobre la serie diferenciada z (estacionaria).
     """
-    n = len(y)
+    n = len(z)
     models = {}  # Guardaremos los coeficientes por horizonte h
     
     # El máximo rezago necesario para tener datos completos en cada fila de atributos
-    max_lag = max(p, q)
+    max_lag = max(p, q) if p > 0 or q > 0 else 1
     
     # Iteramos sobre cada paso
     for h in range(1, H + 1):
-        # Para predecir Y_{t+h}, necesitamos conocer Y y eps en t, t-1,...
-        # El tiempo "t" disponible comienza en max_lag (para poder mirar hacia atrás max_lag steps)
-        # Además, como el target es t+h, t no puede exceder n - 1 - h (para que t+h <= n-1).
-        
+        # Para predecir z_{t+h}, necesitamos conocer z y eps en t, t-1,...
         t_start = max_lag
-        t_end = n - h  # para que el slice max de t sea n - h - 1, y Y target sea hasta n-1
+        t_end = n - h
         
         if t_end <= t_start:
             raise ValueError(f"No hay suficientes datos para el horizonte {h} con lags p={p}, q={q}.")
             
         n_obs = t_end - t_start
         
-        # Objetivo Y: y_{t+h}
-        Y_target = y[t_start + h : t_end + h]
+        # Objetivo: z_{t+h} (serie diferenciada)
+        Y_target = z[t_start + h : t_end + h]
         
         # Diseñar Matriz X
         X = np.zeros((n_obs, 1 + p + q))
         X[:, 0] = 1.0  # Intersección
         
-        # Rezagos AR de 'y': y_t, y_{t-1}, ... y_{t-p+1}
+        # Rezagos AR de 'z': z_t, z_{t-1}, ... z_{t-p+1}
         for i in range(p):
-            X[:, 1 + i] = y[t_start - i : t_end - i]
+            X[:, 1 + i] = z[t_start - i : t_end - i]
             
         # Rezagos MA de 'eps_hat': eps_t, eps_{t-1}, ... eps_{t-q+1}
         for j in range(q):
@@ -94,23 +92,23 @@ def estimate_two_phase_model(y, eps_hat, p, q, H):
         
     return models
 
-def grid_search_arima(y_train, p_max, q_max, H, m=20):
+def grid_search_arima(z_train, p_max, q_max, H, m=20):
     """
     Búsqueda grid de (p, q) minimizando el AIC del modelo OLS para h=1.
-    Realizado EXCLUSIVAMENTE sobre el conjunto de ENTRENAMIENTO.
+    Realizado EXCLUSIVAMENTE sobre la serie diferenciada z_train.
     """
-    eps_hat = estimate_residuals(y_train, m)
+    eps_hat = estimate_residuals(z_train, m)
     
     best_aic = float('inf')
     best_p = 0
     best_q = 0
     best_models = None
     
-    n = len(y_train)
+    n = len(z_train)
     
     for p in range(1, p_max + 1):
         for q in range(q_max + 1):
-            max_lag_pq = max(p, q)
+            max_lag_pq = max(p, q) if p > 0 or q > 0 else 1
             h = 1  # Evaluaremos AIC usando solo predecir 1 paso adelante
             
             t_start = max_lag_pq
@@ -122,12 +120,12 @@ def grid_search_arima(y_train, p_max, q_max, H, m=20):
             n_obs = t_end - t_start
             
             # Matriz X para h=1
-            Y_target = y_train[t_start + h : t_end + h]
+            Y_target = z_train[t_start + h : t_end + h]
             X = np.zeros((n_obs, 1 + p + q))
             X[:, 0] = 1.0
             
             for i in range(p):
-                X[:, 1 + i] = y_train[t_start - i : t_end - i]
+                X[:, 1 + i] = z_train[t_start - i : t_end - i]
             for j in range(q):
                 X[:, 1 + p + j] = eps_hat[t_start - j : t_end - j]
                 
@@ -148,7 +146,7 @@ def grid_search_arima(y_train, p_max, q_max, H, m=20):
                 best_q = q
                 
     # Una vez encontrados los mejores p, q, entrenamos para todos los h
-    best_models = estimate_two_phase_model(y_train, eps_hat, best_p, best_q, H)
+    best_models = estimate_two_phase_model(z_train, eps_hat, best_p, best_q, H)
     
     return best_p, best_q, best_models, eps_hat, best_aic
 
@@ -183,7 +181,8 @@ def export_train_results(p, q, models, filepath='train.csv'):
 def train_model(y, p_max=5, q_max=5, H=12, m=20):
     """
     Función principal de entrenamiento con split 80/20 cronológico.
-    RESTRICCIÓN: Fase 1 y 2 se aplican EXCLUSIVAMENTE sobre el conjunto TRAIN.
+    Lee d desde adf.csv, diferencia y_train, y entrena sobre z_train.
+    RESTRICCIÓN: Fase 1 y 2 se aplican EXCLUSIVAMENTE sobre z_train (serie estacionaria).
     """
     y = np.asarray(y, dtype=float)
     n = len(y)
@@ -195,9 +194,17 @@ def train_model(y, p_max=5, q_max=5, H=12, m=20):
     
     print(f"Split Train/Test: {n_train} train (80%), {len(y_test)} test (20%)")
     
-    # Grid search y estimación EXCLUSIVAMENTE sobre TRAIN
+    # Leer d desde adf.csv
+    d = read_d_from_adf('adf.csv')
+    print(f"Orden de integración d={d} (desde adf.csv)")
+    
+    # Diferenciar y_train para obtener z_train (serie estacionaria)
+    z_train = apply_differencing(y_train, d)
+    print(f"Longitud de z_train después de d={d} diferenciaciones: {len(z_train)}")
+    
+    # Grid search y estimación EXCLUSIVAMENTE sobre z_train
     best_p, best_q, models, residuals, best_aic = grid_search_arima(
-        y_train, p_max, q_max, H, m
+        z_train, p_max, q_max, H, m
     )
     
     print(f"Mejores parámetros encontrados: p={best_p}, q={best_q}, AIC={best_aic:.4f}")
@@ -212,6 +219,8 @@ def train_model(y, p_max=5, q_max=5, H=12, m=20):
         'residuals': residuals,
         'y_train': y_train,
         'y_test': y_test,
+        'z_train': z_train,
+        'd': d,
         'n_train': n_train,
         'H': H,
         'm': m

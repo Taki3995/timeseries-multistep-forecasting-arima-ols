@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from utility import mnse, mape, recover_prediction, jarque_bera
+from utility import mnse, mape, recover_prediction, jarque_bera, read_d_from_adf, apply_differencing
 from trn import train_model
 
 def load_data(filepath='tseries.csv'):
@@ -17,24 +17,46 @@ def load_data(filepath='tseries.csv'):
         print(f"Error: No se encontró el archivo {filepath}")
         return np.array([])
 
-def predict_multi_step(train_result, d=0):
+def predict_multi_step(train_result, d=None):
     """
     Ejecuta predicciones multi-step sobre el conjunto de TEST.
     
+    Cambios clave:
+    - Usa predicciones Z iterativas (sin data leakage de y_test)
+    - Fija innovaciones MA a 0 para t > T (futuro inobservable)
+    - Integra las predicciones z_pred a Y_pred usando recover_prediction
+    
     Parámetros:
-    - train_result: dict retornado por train_model() con modelos entrenados
-    - d: orden de integración (para recuperación si d > 0)
+    - train_result: dict retornado por train_model()
+    - d: orden de integración (si None, lo lee desde adf.csv)
     
     Retorna: dict con predicciones y métricas
     """
     models = train_result['models']
     y_train = train_result['y_train']
     y_test = train_result['y_test']
+    z_train = train_result['z_train']
     residuals = train_result['residuals']
     H = train_result['H']
+    n_train = train_result['n_train']
+    
+    # Leer d si no está especificado
+    if d is None:
+        d = read_d_from_adf('adf.csv')
+    
+    p = train_result['p']
+    q = train_result['q']
+    
+    # Buffer de serie original Y para recuperación
+    Y_buffer = y_train.tolist()
+    
+    # Buffer de serie diferenciada Z para predicciones iterativas
+    Z_buffer = z_train.tolist()
+    
+    # Buffer de predicciones Z generadas
+    Z_pred_buffer = []
     
     predictions = []
-    n_train = train_result['n_train']
     
     # Para cada paso h en el horizonte
     for h in range(1, len(y_test) + 1):
@@ -47,55 +69,54 @@ def predict_multi_step(train_result, d=0):
         model_data = models[h]
         theta_h = model_data['theta']
         
-        # Índice en la serie completa
-        t_current = n_train + h - 1
-        
-        # Construir vector de features para predicción en el instante actual
-        p = train_result['p']
-        q = train_result['q']
-        max_lag = max(p, q) if p > 0 or q > 0 else 1
-        
-        # Vector feature: [const, AR lags, MA lags]
+        # Vector feature: [const, AR lags de Z, MA lags]
         x_h = np.zeros(1 + p + q)
         x_h[0] = 1.0  # Constante
         
-        # AR lags: y_{t-i} para i=0..p-1
-        # En el conjunto TEST, necesitamos usar valores de TRAIN también
-        y_full = np.concatenate([y_train, y_test])
-        
+        # AR lags: z_{t-i} para i=0..p-1
+        # CRÍTICO: Usar predicciones Z iterativas para evitar data leak
         for i in range(p):
-            idx = t_current - i
-            if 0 <= idx < len(y_full):
-                x_h[1 + i] = y_full[idx]
+            # Índice relativo dentro del buffer
+            idx_in_buffer = len(Z_buffer) + len(Z_pred_buffer) - 1 - i
+            
+            if idx_in_buffer >= 0 and idx_in_buffer < len(Z_buffer) + len(Z_pred_buffer):
+                if idx_in_buffer < len(Z_buffer):
+                    x_h[1 + i] = Z_buffer[idx_in_buffer]
+                else:
+                    # Usar predicción previa de Z_pred_buffer
+                    x_h[1 + i] = Z_pred_buffer[idx_in_buffer - len(Z_buffer)]
         
         # MA lags: eps_{t-i} para i=0..q-1
+        # CRÍTICO: Forzar a 0 si t-j > n_train (futuro inobservable)
         for j in range(q):
-            idx = n_train + h - 1 - j
-            if 0 <= idx < len(residuals):
-                x_h[1 + p + j] = residuals[idx]
+            # Índice temporal absoluto
+            t_idx = n_train + h - 1 - j
+            
+            if t_idx < n_train and 0 <= t_idx < len(residuals):
+                # Dentro del conjunto de entrenamiento
+                x_h[1 + p + j] = residuals[t_idx]
+            else:
+                # Futuro (t_idx >= n_train): fijar a 0
+                x_h[1 + p + j] = 0.0
         
-        # Predicción en diferencias: ẑ_{T+h}
+        # Predicción en serie diferenciada: ẑ_{T+h}
         z_pred = np.dot(x_h, theta_h)
+        Z_pred_buffer.append(z_pred)
         
-        # Recuperación si d > 0: aplicar operador inverso de diferenciación
+        # Recuperación iterativa: integrar z_pred a Y_pred
         if d > 0:
-            # Necesitamos historiales de valores anteriores
-            hist_y = []
-            for k in range(d):
-                idx = t_current - k
-                if 0 <= idx < len(y_full):
-                    hist_y.insert(0, y_full[idx])
-                else:
-                    hist_y.insert(0, 0.0)
+            # Extraer últimos d valores de Y_buffer para recuperación
+            hist_y = Y_buffer[-d:] if len(Y_buffer) >= d else Y_buffer + [0.0] * (d - len(Y_buffer))
+            hist_y = hist_y[-d:]  # Asegurar exactamente d elementos
             
-            # Asegurar que hist_y tiene exactamente d elementos
-            while len(hist_y) < d:
-                hist_y.insert(0, 0.0)
-            hist_y = hist_y[-d:]
-            
+            # Recuperar predicción en dominio original
             y_pred = recover_prediction(z_pred, hist_y, d)
+            
+            # Actualizar Y_buffer para próximas iteraciones
+            Y_buffer.append(y_pred)
         else:
             y_pred = z_pred
+            Y_buffer.append(y_pred)
         
         # Valor real en el TEST set
         if h - 1 < len(y_test):
@@ -109,7 +130,8 @@ def predict_multi_step(train_result, d=0):
             'h': h,
             'y_real': y_real,
             'y_pred': y_pred,
-            'error': error
+            'error': error,
+            'z_pred': z_pred
         })
     
     return predictions
@@ -185,10 +207,10 @@ def plot_results(predictions, H):
 
 def main():
     """
-    Orquestador principal: integra ADF, TRN y TST para predicción completa.
+    Orquestador principal: integra ADF -> TRN -> TST para predicción completa.
     """
     print("="*70)
-    print("PIPELINE COMPLETO: ADF -> TRN -> TST")
+    print("PIPELINE COMPLETO: ADF -> TRN -> TST (Versión Corregida)")
     print("="*70)
     
     # Cargar datos
@@ -198,17 +220,17 @@ def main():
     
     print(f"\n[1/3] Datos cargados: {len(y)} observaciones")
     
-    # Fase 1: Entrenamiento con split 80/20
+    # Fase 1: Entrenamiento con split 80/20 y diferenciación
     print("\n[2/3] Entrenamiento Two-Phase OLS (conjunto TRAIN 80%)...")
     train_result = train_model(y, p_max=5, q_max=5, H=12, m=20)
     
     p = train_result['p']
     q = train_result['q']
-    print(f"  → Parámetros óptimos: p={p}, q={q}")
+    d = train_result['d']
+    print(f"  → Parámetros óptimos: p={p}, q={q}, d={d}")
     
-    # Fase 2: Predicción multi-step sobre TEST
-    print("\n[3/3] Predicción multi-step (conjunto TEST 20%)...")
-    d = 1  # Suponer d=1 (se puede obtener de ADF)
+    # Fase 2: Predicción multi-step sobre TEST (sin data leakage)
+    print("\n[3/3] Predicción multi-step (conjunto TEST 20%, sin data leakage)...")
     predictions = predict_multi_step(train_result, d=d)
     print(f"  → {len(predictions)} predicciones generadas")
     
@@ -239,8 +261,8 @@ def main():
     # Visualizar
     plot_results(predictions, train_result['H'])
     
-    print("\n✓ Pipeline completado exitosamente.")
-    print("  - adf.csv (próximamente desde adf.py)")
+    print("\n✓ Pipeline completado exitosamente (versión corregida).")
+    print("  - adf.csv (generado)")
     print("  - train.csv (exportado)")
     print("  - test.csv (exportado)")
     print("  - prediccion.png (generado)")

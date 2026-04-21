@@ -1,0 +1,202 @@
+================================================================================
+MANUAL DE USUARIO - TALLER 2: PRONÓSTICO MULTI-PASO ARIMA
+================================================================================
+
+1. DESCRIPCIÓN GENERAL
+================================================================================
+
+Este proyecto implementa un pipeline completo de pronóstico de series de tiempo
+no-estacionarias mediante:
+
+• Fase ADF: Identificación del orden de integración mediante test 
+           Dickey-Fuller Aumentado
+• Fase TRN: Entrenamiento Two-Phase OLS con split cronológico 80/20
+• Fase TST: Predicción multi-paso con recuperación de dominio original
+
+Metodología:
+- Diferenciación iterativa hasta estacionariedad (d = 0, 1, 2, ...)
+- Estimación de residuos AR(m) (Fase 1)
+- Modelado ARMA por horizonte h (Fase 2)
+- Predicción con prevención de data leakage
+- Recuperación Newton para d > 0
+
+
+2. REQUISITOS
+================================================================================
+
+Software:
+  • Python 3.7 o superior
+  • pip (gestor de paquetes)
+
+Librerías Permitidas:
+  • numpy (álgebra lineal)
+  • pandas (manipulación de datos)
+  • matplotlib (visualización)
+
+PROHIBIDAS:
+  • statsmodels, scikit-learn, scipy.stats
+
+Datos:
+  • tseries.csv: serie temporal (una columna, sin encabezado)
+  • Formato: valores numéricos flotantes, uno por línea
+
+
+3. EJECUCIÓN DEL PIPELINE
+================================================================================
+
+Paso 1: Test ADF (Identificación del orden de integración d)
+  $ python adf.py
+  
+  Salida: adf.csv
+  Contiene: d, adf_stat, critical_value, is_stationary, p_optimal
+
+Paso 2: Entrenamiento Two-Phase OLS (80% de los datos)
+  $ python trn.py
+  
+  Salida: train.csv
+  Contiene: h, p, q, coeficientes, SSE, AIC
+  
+  Proceso:
+  - Lee d desde adf.csv
+  - Diferencia y_train → z_train
+  - Grid search (p, q) minimizando AIC
+  - Estima modelos para cada horizonte h
+
+Paso 3: Predicción Multi-paso (20% de los datos, TEST)
+  $ python tst.py
+  
+  Salida: test.csv (predicciones), prediccion.png (gráfico)
+  
+  Proceso:
+  - Carga modelos entrenados desde train.csv
+  - Realiza predicciones iterativas sin data leakage
+  - Recupera predicciones al dominio original (si d > 0)
+  - Calcula métricas: mNSE, MAPE, Jarque-Bera
+
+
+4. INTERPRETACIÓN DE RESULTADOS
+================================================================================
+
+adf.csv (Resultados del Test de Raíces Unitarias)
+  • d: Orden de diferenciación
+  • adf_stat: Estadístico τ̂ calculado
+  • critical_value: Valor crítico (α=0.05, típicamente -2.86)
+  • is_stationary: True si la serie es estacionaria (τ̂ < crítico)
+  • p_optimal: Número óptimo de rezagos para ese d
+
+train.csv (Coeficientes y Métricas de Entrenamiento)
+  • h: Horizonte de predicción (1, 2, ..., H)
+  • p, q: Órdenes AR y MA del modelo ARMA
+  • coeficientes: Vector θ_h = [const, φ₁, ..., φₚ, θ₁, ..., θₑ]
+  • SSE: Suma de Errores Cuadrados
+  • AIC: Criterio de Información de Akaike
+
+test.csv (Predicciones y Métricas de Evaluación)
+  • h: Horizonte de predicción
+  • y_real: Valor observado en el TEST set
+  • y_pred: Valor predicho
+  • error: Diferencia (y_real - y_pred)
+  • mNSE: Eficiencia Nash-Sutcliffe Modificada (-∞ a 1, ideal ≈ 1)
+  • MAPE: Error Porcentual Absoluto Medio (%, ideal ≈ 0)
+  • JB: Estadístico Jarque-Bera (test de normalidad)
+
+prediccion.png (Gráfico Comparativo)
+  • Serie azul: Valores reales del TEST set
+  • Serie roja punteada: Predicciones multi-paso
+
+
+5. RESTRICCIONES TÉCNICAS
+================================================================================
+
+✓ Solo librerías permitidas: numpy, pandas, matplotlib
+✓ Pseudo-inversa vía SVD manual (NO np.linalg.pinv)
+  - Implementación: A⁺ = Vᵀ · diag(1/S) · Uᵀ (usando SVD)
+✓ Split 80/20 cronológico (respeta orden temporal)
+✓ Entrenamiento exclusivo sobre TRAIN
+  - Fase 1 y Fase 2 NO ven datos del TEST set
+✓ Prevención de data leakage en predicción
+  - AR lags usan predicciones iterativas (no y_test)
+  - MA lags forzados a 0 para t > T (futuro inobservable)
+✓ Recuperación Newton para d > 0
+  - Formula: Ŷ_{T+h} = Ẑ_{T+h} - Σ (-1)ᵏ C(d,k) Y_{T+h-k}
+
+
+6. FÓRMULAS MAESTRAS
+================================================================================
+
+Estadístico ADF (Dickey-Fuller Aumentado):
+  τ̂ = γ̂ / SE(γ̂)
+  
+  donde γ̂ es el coeficiente de y_{t-1} en:
+  ΔY_t = c + β·t + γ·Y_{t-1} + Σᵢ δᵢ·ΔY_{t-i} + εₜ
+
+Criterio Dickey-Fuller (α=0.05):
+  τ̂ < -2.86  →  Rechazar H₀  →  Serie estacionaria
+
+Modified Nash-Sutcliffe Efficiency (mNSE):
+  mNSE = 1 - (Σ(yᵢ - ŷᵢ)²) / (Σ(yᵢ - ȳ)²)
+
+Mean Absolute Percentage Error (MAPE):
+  MAPE = (100/n) · Σ |yᵢ - ŷᵢ| / |yᵢ|
+
+Jarque-Bera (Test de Normalidad):
+  JB = (n/6) · (S² + (K-3)²/4)
+  
+  donde S es asimetría y K es curtosis
+  Valor crítico (α=0.05): 5.991
+
+Recuperación Newton:
+  Ŷ_{T+h} = Ẑ_{T+h} - Σₖ₌₁ᵈ (-1)ᵏ · C(d,k) · Y_{T+h-k}
+
+
+7. ARCHIVOS DEL PROYECTO
+================================================================================
+
+Entrada:
+  • tseries.csv           - Serie temporal de datos
+
+Archivos Principales:
+  • adf.py                - Test ADF iterativo
+  • trn.py                - Entrenamiento Two-Phase OLS
+  • tst.py                - Predicción multi-paso
+  • utility.py            - Funciones auxiliares (SVD, métricas, etc.)
+
+Salida:
+  • adf.csv               - Resultados ADF
+  • train.csv             - Coeficientes entrenados
+  • test.csv              - Predicciones y métricas
+  • prediccion.png        - Visualización
+
+
+8. TROUBLESHOOTING
+================================================================================
+
+Problema: "ModuleNotFoundError: No module named 'numpy'"
+Solución: pip install numpy pandas matplotlib
+
+Problema: "No se encontró el archivo adf.csv"
+Solución: Ejecutar primero: python adf.py
+
+Problema: Predicciones muy alejadas de valores reales
+Posible Causa: d incorrecto o serie no suficientemente estacionaria
+Solución: Revisar adf.csv, aumentar max_d en adf.py
+
+Problema: Valores NaN en resultados
+Solución: Verificar que tseries.csv no contenga valores faltantes
+
+
+9. CONTACTO Y REFERENCIAS
+================================================================================
+
+Especificaciones:
+  • Ver spec.md para detalle técnico completo
+  • Ver .clinerules para reglas de programación
+
+Metodología ARIMA Two-Phase:
+  • Fase 1: Estimación de residuos con AR(m) largo
+  • Fase 2: Modelado independiente por horizonte
+  • Recuperación: Integración iterativa para d > 0
+
+================================================================================
+Generado: 2026-04-21
+================================================================================
