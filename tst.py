@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from utility import mnse, mape, recover_prediction, jarque_bera, read_d_from_adf, apply_differencing
 from trn import train_model
+
 def load_data(filepath='tseries.csv'):
     try:
         df = pd.read_csv(filepath, header=None)
@@ -11,6 +12,7 @@ def load_data(filepath='tseries.csv'):
     except FileNotFoundError:
         print(f"Error: No se encontró el archivo {filepath}")
         return np.array([])
+
 def predict_multi_step(train_result, d=None):
     models = train_result['models']
     y_train = train_result['y_train']
@@ -73,6 +75,7 @@ def predict_multi_step(train_result, d=None):
             'z_pred': z_pred
         })
     return predictions
+
 def evaluate_predictions(predictions, d=0):
     y_true = np.array([p['y_real'] for p in predictions if not np.isnan(p['y_real'])])
     y_pred = np.array([p['y_pred'] for p in predictions if not np.isnan(p['y_real'])])
@@ -88,6 +91,7 @@ def evaluate_predictions(predictions, d=0):
         'JB': jb_stat,
         'n_predictions': len(y_true)
     }
+
 def export_test_results(predictions, metrics, filepath='test.csv'):
     rows = []
     for pred in predictions:
@@ -104,6 +108,7 @@ def export_test_results(predictions, metrics, filepath='test.csv'):
     df.to_csv(filepath, index=False)
     print(f"Resultados de predicción exportados a {filepath}")
     return df
+
 def plot_results(predictions, H):
     h_vals = np.array([p['h'] for p in predictions if not np.isnan(p['y_real'])])
     y_true = np.array([p['y_real'] for p in predictions if not np.isnan(p['y_real'])])
@@ -122,6 +127,7 @@ def plot_results(predictions, H):
     plt.savefig('prediccion.png', dpi=150, bbox_inches='tight')
     plt.close()
     print("Gráfico comparativo guardado como 'prediccion.png'.")
+
 def main():
     print("="*70)
     print("PIPELINE COMPLETO: ADF -> TRN -> TST (Versión Corregida)")
@@ -131,7 +137,7 @@ def main():
         return
     print(f"\n[1/3] Datos cargados: {len(y)} observaciones")
     print("\n[2/3] Entrenamiento Two-Phase OLS (conjunto TRAIN 80%)...")
-    train_result = train_model(y, p_max=5, q_max=5, H=12, m=20)
+    train_result = train_model(y, p_max=10, q_max=10, H=12, m=20)
     p = train_result['p']
     q = train_result['q']
     d = train_result['d']
@@ -153,6 +159,20 @@ def main():
         print(f"  ⚠ JB > {jb_critical}: Se rechaza normalidad de residuos (α=0.05)")
     else:
         print(f"  ✓ JB ≤ {jb_critical}: No se rechaza normalidad de residuos (α=0.05)")
+    targets = [1, 3, 5]
+    for h_val in targets:
+        row = next((p for p in predictions if p['h'] == h_val), None)
+        if row is None:
+            continue
+        y_real = row['y_real']
+        y_pred = row['y_pred']
+        error = row['error']
+        if y_real == 0:
+            mape_h = 0.0
+        else:
+            mape_h = np.abs(error / y_real) * 100.0
+        mnse_h = mnse(np.array([y_real]), np.array([y_pred]))
+        print(f"h={h_val} | error={error:.6f} | mNSE={mnse_h:.6f} | MAPE={mape_h:.2f}%")
     print("="*70)
     export_test_results(predictions, metrics, 'test.csv')
     plot_results(predictions, train_result['H'])
@@ -161,5 +181,6 @@ def main():
     print("  - train.csv (exportado)")
     print("  - test.csv (exportado)")
     print("  - prediccion.png (generado)")
+
 if __name__ == '__main__':
     main()
