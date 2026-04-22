@@ -74,13 +74,14 @@ Cálculo manual de momentos para el estadístico $JB$:
    - Para $d > 0$, recuperar el dominio original usando el Teorema del Binomio de Newton:
      $$\hat{Y}_{T+h} = \text{Recuperar}(\hat{y}_{T+h}, \Delta^{d-1} Y_T, \dots, Y_T)$$
 4. **Evaluación:**
-   - Calcular mNSE, MAPE y Jarque-Bera
-   - Exportar predicciones y métricas a `test.csv` (h, y_real, y_pred, error, mNSE, MAPE, JB)
+   - Calcular mNSE_h y MAPE_h por horizonte
+   - Jarque-Bera usando residuos de entrenamiento para h ∈ {1, 3, 5}
+   - Exportar métricas por horizonte a `test.csv` (h, mNSE_h, MAPE_h, JB_train_h)
 
 ## 7. Entregables de Datos
 
 - **`adf.csv`:** d, estadístico, valor_crítico, estacionario
 - **`train.csv`:** h, p, q, coeficientes, SSE, AIC
-- **`test.csv`:** h, y_real, y_pred, error, mNSE, MAPE, JB
+- **`test.csv`:** columnas estrictamente: h, mNSE_h, MAPE_h, JB_train_h
 
 ## NO USAR COMENTARIOS. solo dejar el codigo sin ningún tipo de comentario en el

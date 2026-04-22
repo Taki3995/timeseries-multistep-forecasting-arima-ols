@@ -28,7 +28,7 @@
 
 - `adf.csv`: Resultados ADF por orden de diferenciación (d, estadístico, valor crítico al 5%, estacionario)
 - `train.csv`: Coeficientes y métricas del entrenamiento (h, p, q, coeficientes, SSE, AIC)
-- `test.csv`: Predicciones multi-step y métricas finales (h, y_real, y_pred, error, mNSE, MAPE, JB)
+- `test.csv`: Métricas por horizonte agrupadas estrictamente en las columnas (h, mNSE_h, MAPE_h, JB_train_h)
 
 ## Split Train/Test (OBLIGATORIO)
 

@@ -44,7 +44,8 @@ def estimate_two_phase_model(z, eps_hat, p, q, H):
         models[h] = {
             'theta': theta_h,
             'sse': sse,
-            'aic': aic
+            'aic': aic,
+            'residuals': residuals
         }
     return models
 

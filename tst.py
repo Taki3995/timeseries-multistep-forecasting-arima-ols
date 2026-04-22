@@ -13,116 +13,100 @@ def load_data(filepath='tseries.csv'):
         print(f"Error: No se encontró el archivo {filepath}")
         return np.array([])
 
-def predict_multi_step(train_result, d=None):
+def build_features_rolling(y_hist, eps_hist, p, q):
+    x = np.zeros(1 + p + q)
+    x[0] = 1.0
+    for i in range(p):
+        idx = len(y_hist) - 1 - i
+        if idx >= 0:
+            x[1 + i] = y_hist[idx]
+    for j in range(q):
+        idx = len(eps_hist) - 1 - j
+        if idx >= 0:
+            x[1 + p + j] = eps_hist[idx]
+        else:
+            x[1 + p + j] = 0.0
+    return x
+
+def rolling_forecast_metrics(train_result, d):
     models = train_result['models']
     y_train = train_result['y_train']
     y_test = train_result['y_test']
     z_train = train_result['z_train']
-    residuals = train_result['residuals']
-    H = train_result['H']
-    n_train = train_result['n_train']
-    if d is None:
-        d = read_d_from_adf('adf.csv')
     p = train_result['p']
     q = train_result['q']
-    Y_buffer = y_train.tolist()
-    Z_buffer = z_train.tolist()
-    Z_pred_buffer = []
-    predictions = []
-    for h in range(1, len(y_test) + 1):
-        if h > H:
-            break
+    H = train_result['H']
+    results = []
+    for h in range(1, H + 1):
         if h not in models:
             continue
-        model_data = models[h]
-        theta_h = model_data['theta']
-        x_h = np.zeros(1 + p + q)
-        x_h[0] = 1.0
-        for i in range(p):
-            idx_in_buffer = len(Z_buffer) + len(Z_pred_buffer) - 1 - i
-            if idx_in_buffer >= 0 and idx_in_buffer < len(Z_buffer) + len(Z_pred_buffer):
-                if idx_in_buffer < len(Z_buffer):
-                    x_h[1 + i] = Z_buffer[idx_in_buffer]
-                else:
-                    x_h[1 + i] = Z_pred_buffer[idx_in_buffer - len(Z_buffer)]
-        for j in range(q):
-            t_idx = n_train + h - 1 - j
-            if t_idx < n_train and 0 <= t_idx < len(residuals):
-                x_h[1 + p + j] = residuals[t_idx]
+        theta_h = models[h]['theta']
+        residuals_train = models[h]['residuals']
+        y_pred_h = []
+        y_real_h = []
+        max_t = len(y_test) - h
+        for t in range(max_t):
+            y_hist = list(y_train) + list(y_test[:t])
+            if d > 0:
+                z_hist = apply_differencing(np.array(y_hist, dtype=float), d).tolist()
             else:
-                x_h[1 + p + j] = 0.0
-        z_pred = np.dot(x_h, theta_h)
-        Z_pred_buffer.append(z_pred)
-        if d > 0:
-            hist_y = Y_buffer[-d:] if len(Y_buffer) >= d else Y_buffer + [0.0] * (d - len(Y_buffer))
-            hist_y = hist_y[-d:]
-            y_pred = recover_prediction(z_pred, hist_y, d)
-            Y_buffer.append(y_pred)
-        else:
-            y_pred = z_pred
-            Y_buffer.append(y_pred)
-        if h - 1 < len(y_test):
-            y_real = y_test[h - 1]
-            error = y_real - y_pred
-        else:
-            y_real = np.nan
-            error = np.nan
-        predictions.append({
+                z_hist = list(y_hist)
+            eps_hist = list(residuals_train)
+            x = build_features_rolling(z_hist, eps_hist, p, q)
+            z_pred = np.dot(x, theta_h)
+            if d > 0:
+                hist_y = y_hist[-d:] if len(y_hist) >= d else y_hist + [0.0] * (d - len(y_hist))
+                hist_y = hist_y[-d:]
+                y_pred = recover_prediction(z_pred, hist_y, d)
+            else:
+                y_pred = z_pred
+            y_real = y_test[t + h - 1]
+            y_pred_h.append(y_pred)
+            y_real_h.append(y_real)
+        y_pred_h = np.array(y_pred_h, dtype=float)
+        y_real_h = np.array(y_real_h, dtype=float)
+        mNSE_h = mnse(y_real_h, y_pred_h)
+        MAPE_h = mape(y_real_h, y_pred_h)
+        jb_h = jarque_bera(residuals_train) if h in [1, 3, 5] else np.nan
+        results.append({
             'h': h,
-            'y_real': y_real,
-            'y_pred': y_pred,
-            'error': error,
-            'z_pred': z_pred
+            'mNSE_h': mNSE_h,
+            'MAPE_h': MAPE_h,
+            'JB_train_h': jb_h,
+            'y_pred': y_pred_h,
+            'y_real': y_real_h
         })
-    return predictions
+    return results
 
-def evaluate_predictions(predictions, d=0):
-    y_true = np.array([p['y_real'] for p in predictions if not np.isnan(p['y_real'])])
-    y_pred = np.array([p['y_pred'] for p in predictions if not np.isnan(p['y_real'])])
-    errors = y_true - y_pred
-    if len(y_true) == 0:
-        return None
-    mNSE_val = mnse(y_true, y_pred)
-    mape_val = mape(y_true, y_pred)
-    jb_stat = jarque_bera(errors)
-    return {
-        'mNSE': mNSE_val,
-        'MAPE': mape_val,
-        'JB': jb_stat,
-        'n_predictions': len(y_true)
-    }
-
-def export_test_results(predictions, metrics, filepath='test.csv'):
+def export_test_results(results, filepath='test.csv'):
     rows = []
-    for pred in predictions:
+    for r in results:
         rows.append({
-            'h': pred['h'],
-            'y_real': pred['y_real'],
-            'y_pred': pred['y_pred'],
-            'error': pred['error'],
-            'mNSE': metrics['mNSE'],
-            'MAPE': metrics['MAPE'],
-            'JB': metrics['JB']
+            'h': r['h'],
+            'mNSE_h': r['mNSE_h'],
+            'MAPE_h': r['MAPE_h'],
+            'JB_train_h': r['JB_train_h']
         })
     df = pd.DataFrame(rows)
     df.to_csv(filepath, index=False)
     print(f"Resultados de predicción exportados a {filepath}")
     return df
 
-def plot_results(predictions, H):
-    h_vals = np.array([p['h'] for p in predictions if not np.isnan(p['y_real'])])
-    y_true = np.array([p['y_real'] for p in predictions if not np.isnan(p['y_real'])])
-    y_pred = np.array([p['y_pred'] for p in predictions if not np.isnan(p['y_real'])])
-    if len(y_true) == 0:
+def plot_results(results):
+    if len(results) == 0:
         print("No hay predicciones válidas para graficar.")
         return
+    h_vals = [r['h'] for r in results]
     plt.figure(figsize=(12, 6))
-    plt.plot(h_vals, y_true, label='Serie Real (Test)', color='blue', marker='o', linewidth=2)
-    plt.plot(h_vals, y_pred, label='Predicción Multi-step', color='red', linestyle='--', marker='x', linewidth=2)
-    plt.title(f'Predicción Multi-step-ahead vs Realidad (H={H})')
-    plt.xlabel('Horizonte de Predicción (h)')
+    for r in results:
+        if len(r['y_real']) == 0:
+            continue
+        plt.plot(r['y_real'], label=f"Real h={r['h']}", linewidth=1)
+        plt.plot(r['y_pred'], label=f"Pred h={r['h']}", linestyle='--', linewidth=1)
+    plt.title('Rolling Forecast - Predicción vs Realidad')
+    plt.xlabel('Índice de tiempo en TEST')
     plt.ylabel('Valor de la Serie')
-    plt.legend()
+    plt.legend(ncol=2, fontsize=8)
     plt.grid(True, alpha=0.3)
     plt.savefig('prediccion.png', dpi=150, bbox_inches='tight')
     plt.close()
@@ -130,7 +114,7 @@ def plot_results(predictions, H):
 
 def main():
     print("="*70)
-    print("PIPELINE COMPLETO: ADF -> TRN -> TST (Versión Corregida)")
+    print("PIPELINE COMPLETO: ADF -> TRN -> TST (Rolling Forecast)")
     print("="*70)
     y = load_data('tseries.csv')
     if len(y) == 0:
@@ -138,48 +122,34 @@ def main():
     print(f"\n[1/3] Datos cargados: {len(y)} observaciones")
     print("\n[2/3] Entrenamiento Two-Phase OLS (conjunto TRAIN 80%)...")
     train_result = train_model(y, p_max=10, q_max=10, H=12, m=20)
-    p = train_result['p']
-    q = train_result['q']
     d = train_result['d']
-    print(f"  → Parámetros óptimos: p={p}, q={q}, d={d}")
-    print("\n[3/3] Predicción multi-step (conjunto TEST 20%, sin data leakage)...")
-    predictions = predict_multi_step(train_result, d=d)
-    print(f"  → {len(predictions)} predicciones generadas")
-    metrics = evaluate_predictions(predictions, d=d)
+    print(f"  → Parámetros óptimos: p={train_result['p']}, q={train_result['q']}, d={d}")
+    print("\n[3/3] Rolling Forecast sobre TEST (sin data leakage)...")
+    results = rolling_forecast_metrics(train_result, d)
+    print(f"  → Métricas por horizonte: {len(results)}")
     print("\n" + "="*70)
-    print("MÉTRICAS DE EVALUACIÓN")
+    print("MÉTRICAS POR HORIZONTE")
     print("="*70)
-    print(f"Orden de integración (d): {d}")
-    print(f"Número de predicciones: {metrics['n_predictions']}")
-    print(f"mNSE: {metrics['mNSE']:.4f}")
-    print(f"MAPE: {metrics['MAPE']:.2f}%")
-    print(f"Jarque-Bera: {metrics['JB']:.4f}")
+    for r in results:
+        jb_text = f"JB_train={r['JB_train_h']:.4f}" if not np.isnan(r['JB_train_h']) else "JB_train=NA"
+        print(f"h={r['h']} | mNSE_h={r['mNSE_h']:.4f} | MAPE_h={r['MAPE_h']:.2f}% | {jb_text}")
     jb_critical = 5.991
-    if metrics['JB'] > jb_critical:
-        print(f"  ⚠ JB > {jb_critical}: Se rechaza normalidad de residuos (α=0.05)")
-    else:
-        print(f"  ✓ JB ≤ {jb_critical}: No se rechaza normalidad de residuos (α=0.05)")
-    targets = [1, 3, 5]
-    for h_val in targets:
-        row = next((p for p in predictions if p['h'] == h_val), None)
-        if row is None:
+    for h in [1, 3, 5]:
+        row = next((r for r in results if r['h'] == h), None)
+        if row is None or np.isnan(row['JB_train_h']):
             continue
-        y_real = row['y_real']
-        y_pred = row['y_pred']
-        error = row['error']
-        if y_real == 0:
-            mape_h = 0.0
+        if row['JB_train_h'] > jb_critical:
+            print(f"h={h} -> JB_train > {jb_critical}: Se rechaza normalidad")
         else:
-            mape_h = np.abs(error / y_real) * 100.0
-        mnse_h = mnse(np.array([y_real]), np.array([y_pred]))
-        print(f"h={h_val} | error={error:.6f} | mNSE={mnse_h:.6f} | MAPE={mape_h:.2f}%")
+            print(f"h={h} -> JB_train ≤ {jb_critical}: No se rechaza normalidad")
     print("="*70)
-    export_test_results(predictions, metrics, 'test.csv')
-    plot_results(predictions, train_result['H'])
-    print("\n✓ Pipeline completado exitosamente (versión corregida).")
+    export_test_results(results, 'test.csv')
+    plot_results(results)
+    print("\n✓ Pipeline completado exitosamente (rolling forecast).")
     print("  - adf.csv (generado)")
     print("  - train.csv (exportado)")
-    print("  - test.csv (exportado)")
+    print("  - test.csv (exportado)"
+          )
     print("  - prediccion.png (generado)")
 
 if __name__ == '__main__':
