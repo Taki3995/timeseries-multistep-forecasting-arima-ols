@@ -10,5 +10,9 @@ gsd-file-manifest.json
 __pycache__
 prediccion.png
 .vscode
+utility.csv
+adf.csv
+train.csv
+test.csv
 
 #!*
