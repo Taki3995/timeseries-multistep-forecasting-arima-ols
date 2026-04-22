@@ -1,65 +1,66 @@
-# GSD — Get Shit Done
+# Reglas Estrictas de Programación - Taller 2 (Forecasting ARIMA)
 
-- GSD workflows live in `get-shit-done/workflows/`. Load the relevant workflow when
-  the user runs a `/gsd-*` command.
-- GSD agents live in `agents/`. Use the matching agent when spawning subagents.
-- GSD tools are at `get-shit-done/bin/gsd-tools.cjs`. Run with `node`.
-- Planning artifacts live in `.planning/`. Never edit them outside a GSD workflow.
-- Do not apply GSD workflows unless the user explicitly asks for them.
-- When a GSD command triggers a deliverable (feature, fix, docs), offer the next
-  step to the user using Cline's ask_user tool after completing it.
+## PROTOCOLO DE AISLAMIENTO TOTAL
 
-# Reglas Estrictas de Programación - Taller 2
+- PROHIBIDO: Consultar, leer o actualizar el `engram`.
+- FUENTES EXCLUSIVAS: Solo se permite el uso de información contenida en el directorio actual y en este archivo `.clinerules`.
+- OBJETIVO: Cumplir estrictamente con los requerimientos matemáticos exactos del profesor.
+- RESTRICCIÓN DE CÓDIGO: El código generado NO DEBE TENER NINGÚN TIPO DE COMENTARIO.
 
 ## Restricciones de Librerías
 
 - PERMITIDAS: python, numpy, pandas, matplotlib.
 - PROHIBIDAS: statsmodels, scikit-learn, scipy.stats.
-- PROHIBIDO usar `numpy.linalg.pinv`. Es OBLIGATORIO usar `pinv_svd(A)` implementado manualmente con SVD.
+- PROHIBIDO usar `numpy.linalg.pinv`. Es OBLIGATORIO usar `pinv_svd(A)` implementado manualmente con SVD (U, S, Vh).
 
 ## Estructura de Archivos Obligatoria
 
-- `adf.py`: Test de Dickey-Fuller Aumentado.
-- `trn.py`: Entrenamiento y estimación Two-Phase OLS.
-- `tst.py`: Evaluación y predicción Multi-step-ahead.
-- `utility.py`: Funciones auxiliares (SVD, métricas, recuperación).
+- `adf.py`: Test de Dickey-Fuller Aumentado para identificar d.
+- `trn.py`: Entrenamiento (Grid Search y estimación Two-Phase OLS).
+- `tst.py`: Evaluación, predicción Multi-step-ahead y métricas.
+- `utility.py`: Funciones auxiliares (pinv_svd, métricas, recuperación, test JB).
+
+## Metodología y Flujo de Trabajo
+
+1. Split Train/Test (OBLIGATORIO):
+   - Proporción: 80% entrenamiento / 20% test (cronológico estricto).
+   - Fórmula: n_train = int(0.8 \* len(series)), n_test = len(series) - n_train
+   - Restricción: Fase 1 y 2 de Two-Phase OLS operan EXCLUSIVAMENTE sobre datos TRAIN.
+2. Lectura de archivos largos: Usar herramientas de rango de líneas (read_file con start_line y end_line) si es necesario en vez de leer todo de golpe.
+3. Prioridad Técnica: Brevedad absoluta y código directo.
+
+## Especificaciones Algorítmicas
+
+### 1. Test ADF y Determinación de 'd'
+
+- Evaluar iterativamente d = 0, 1, 2...
+- Nivel de significancia: α=0.05.
+- Para cada 'd', evaluar secuencialmente los 3 casos:
+  - Caso 3 (Con constante y tendencia): Valor Crítico = -3.41
+  - Caso 2 (Con constante): Valor Crítico = -2.86
+  - Caso 1 (Sin constante ni tendencia): Valor Crítico = -1.94
+- Criterio de parada: Detener y fijar 'd' si el estadístico calculado t es MENOR al valor crítico del caso evaluado.
+
+### 2. Entrenamiento: Grid Search y Two-Phase OLS
+
+- Grid Search Óptimo: Iterar estrictamente p ∈ [0, 10] y q ∈ [0, 10] minimizando el Criterio de Información de Akaike (AIC).
+- Fase 1 (Estimación de Residuos): Ajustar un AR(m) donde el orden m es estrictamente m = (p+q)\*3. Extraer residuos epsilon_t.
+- Fase 2 (Estimación Final): Usar los residuos epsilon_t como regresores exógenos para hallar los coeficientes para cada horizonte h.
+- Persistencia: Los valores óptimos de p y q se mantienen fijos para la fase de Testing.
+
+### 3. Fórmulas Maestras a Implementar
+
+- Pseudo-inversa SVD: A^+ = V_h^T _ diag(1/S) _ U^T
+- Predicción Multi-step-ahead (Recuperación Newton):
+  \hat{Y}_{t+h}=\hat{z}_{t+h}-\sum*{k=1}^{d}(-1)^{k}\binom{d}{k}Y*{t+h-k}
+- Test de Jarque-Bera (Cálculo manual con momentos mu_2, mu_3, mu_4):
+  S = mu_3 / (mu_2^{1.5})
+  K = mu_4 / (mu_2^2)
+  JB = (n/6) \* (S^2 + ((K-3)^2)/4)
+  Valor crítico JB (α=0.05): 5.991 (Si JB > 5.991, rechazar normalidad).
 
 ## Exportación de Datos (OBLIGATORIO)
 
-- `adf.csv`: Resultados ADF por orden de diferenciación (d, estadístico, valor crítico al 5%, estacionario)
-- `train.csv`: Coeficientes y métricas del entrenamiento (h, p, q, coeficientes, SSE, AIC)
-- `test.csv`: Métricas por horizonte agrupadas estrictamente en las columnas (h, mNSE_h, MAPE_h, JB_train_h)
-
-## Split Train/Test (OBLIGATORIO)
-
-- Proporción: 80% entrenamiento / 20% test (cronológico para series de tiempo)
-- Fórmula: n_train = int(0.8 \* len(series)), n_test = len(series) - n_train
-- Restricción: Fase 1 y 2 de Two-Phase OLS exclusivamente sobre datos TRAIN
-
-## Tabla de Valores Críticos Dickey-Fuller
-
-| Nivel de Significancia | Valor Crítico |
-| ---------------------- | ------------- |
-| 1% (α=0.01)            | -3.43         |
-| 5% (α=0.05)            | -2.86         |
-| 10% (α=0.10)           | -2.57         |
-
-Criterio: Si $\hat{\tau} < $ valor crítico → Rechazar $H_0$ (serie es estacionaria)
-
-## Fórmulas Maestras
-
-- Multi-step Prediction: $\hat{Y}_{t+h}=\hat{z}_{t+h}-\sum_{k=1}^{d}(-1)^{k}\binom{d}{k}Y_{t+h-k}$.
-- Jarque-Bera: $JB=\frac{n}{6}(S^{2}+\frac{(K-3)^{2}}{4})$
-- Recuperación Newton: $\hat{Y}_{T+h}=Recuperar(\hat{y}_{T+h},\Delta^{d-1}Y_{T},...,Y_{T})$.
-
-## Metodología de Trabajo
-
-1. Usar `read_file` con `start_line` y `end_line` para archivos largos.
-2. Seguir ciclo GSD: Spec -> Plan -> Execute -> Verify.
-
-# PROTOCOLO DE AISLAMIENTO TOTAL
-
-- PROHIBIDO: Consultar, leer o actualizar el `engram`.
-- FUENTES EXCLUSIVAS: Solo se permite el uso de información contenida en el directorio actual y en este archivo `.clinerules`.
-- OBJETIVO: Cumplir estrictamente con los requerimientos.
-- RESTRICCIÓN DE LIBRERÍAS: Solo Python, numpy, pandas y matplotlib. No usar librerías de alto nivel.
+- `adf.csv`: Columnas exactas -> d, estadístico, valor_crítico, estacionario
+- `train.csv`: Columnas exactas -> h, p, q, coeficientes, SSE, AIC
+- `test.csv`: Columnas exactas -> h, mNSE_h, MAPE_h, JB_train_h
