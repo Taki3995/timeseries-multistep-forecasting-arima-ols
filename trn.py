@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from utility import pinv_svd, read_d_from_adf, apply_differencing
 
-def estimate_residuals(y, m=20):
+def estimate_residuals(y, m):
     n = len(y)
     if n <= m:
         raise ValueError(f"La longitud de la serie ({n}) debe ser mayor a m ({m}).")
@@ -17,9 +17,9 @@ def estimate_residuals(y, m=20):
     eps_hat = Y - Y_pred
     residuals = np.zeros(n)
     residuals[m:] = eps_hat
-    return residuals
+    return residuals, theta
 
-def estimate_two_phase_model(z, eps_hat, p, q, H):
+def estimate_two_phase_model(z, eps_hat, p, q, H, theta_m):
     n = len(z)
     models = {}
     max_lag = max(p, q) if p > 0 or q > 0 else 1
@@ -45,7 +45,8 @@ def estimate_two_phase_model(z, eps_hat, p, q, H):
             'theta': theta_h,
             'sse': sse,
             'aic': aic,
-            'residuals': residuals
+            'residuals': residuals,
+            'theta_m': theta_m
         }
     return models
 
@@ -58,9 +59,11 @@ def grid_search_arima(z_train, p_max, q_max, H):
     n = len(z_train)
     for p in range(0, p_max + 1):
         for q in range(0, q_max + 1):
-            m = max(1, (p + q) * 3)
+            if (p + q) == 0:
+                continue
+            m = (p + q) * 3
             try:
-                eps_hat = estimate_residuals(z_train, m)
+                eps_hat, theta_m = estimate_residuals(z_train, m)
             except:
                 continue
             max_lag_pq = max(p, q) if p > 0 or q > 0 else 1
@@ -88,8 +91,8 @@ def grid_search_arima(z_train, p_max, q_max, H):
                 best_p = p
                 best_q = q
                 best_eps_hat = eps_hat
-    best_models = estimate_two_phase_model(z_train, best_eps_hat, best_p, best_q, H)
-    return best_p, best_q, best_models, best_eps_hat, best_aic
+    best_models = estimate_two_phase_model(z_train, best_eps_hat, best_p, best_q, H, theta_m)
+    return best_p, best_q, best_models, best_eps_hat, best_aic, theta_m
 
 def export_train_results(p, q, models, filepath='train.csv'):
     rows = []
@@ -111,7 +114,7 @@ def export_train_results(p, q, models, filepath='train.csv'):
     print(f"Resultados de entrenamiento exportados a {filepath}")
     return df
 
-def train_model(y, p_max=10, q_max=10, H=12, m=20):
+def train_model(y, p_max=10, q_max=10):
     y = np.asarray(y, dtype=float)
     n = len(y)
     n_train = int(0.8 * n)
@@ -122,7 +125,7 @@ def train_model(y, p_max=10, q_max=10, H=12, m=20):
     print(f"Orden de integración d={d} (desde adf.csv)")
     z_train = apply_differencing(y_train, d)
     print(f"Longitud de z_train después de d={d} diferenciaciones: {len(z_train)}")
-    best_p, best_q, models, residuals, best_aic = grid_search_arima(z_train, p_max, q_max, H)
+    best_p, best_q, models, residuals, best_aic, theta_m = grid_search_arima(z_train, p_max, q_max, H=5)
     print(f"Mejores parámetros encontrados: p={best_p}, q={best_q}, AIC={best_aic:.4f}")
     export_train_results(best_p, best_q, models, 'train.csv')
     return {
@@ -135,15 +138,14 @@ def train_model(y, p_max=10, q_max=10, H=12, m=20):
         'z_train': z_train,
         'd': d,
         'n_train': n_train,
-        'H': H,
-        'm': m
+        'theta_m': theta_m
     }
 
 if __name__ == '__main__':
     try:
-        data = pd.read_csv('tseries.csv', header=None)
-        y = data.values.flatten().astype(float)
-        train_result = train_model(y, p_max=10, q_max=10, H=12, m=20)
+        from tst import load_data
+        y = load_data()
+        train_result = train_model(y, p_max=10, q_max=10)
         print("Entrenamiento completado.")
-    except FileNotFoundError:
-        print("Error: No se encontró tseries.csv")
+    except Exception as e:
+        print(f"Error: {e}")

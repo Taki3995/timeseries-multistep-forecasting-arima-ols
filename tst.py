@@ -4,14 +4,16 @@ import matplotlib.pyplot as plt
 from utility import mnse, mape, recover_prediction, jarque_bera, read_d_from_adf, apply_differencing
 from trn import train_model
 
-def load_data(filepath='tseries.csv'):
-    try:
-        df = pd.read_csv(filepath, header=None)
-        series = df.values.flatten().astype(float)
-        return series
-    except FileNotFoundError:
-        print(f"Error: No se encontró el archivo {filepath}")
-        return np.array([])
+def load_data():
+    for fname in ['ts_taller2.csv', 'tseries.csv']:
+        try:
+            df = pd.read_csv(fname, header=None)
+            series = df.values.flatten().astype(float)
+            return series
+        except FileNotFoundError:
+            continue
+    print("Error: No se encontró ningún archivo de serie de tiempo válido.")
+    return np.array([])
 
 def build_features_rolling(y_hist, eps_hist, p, q):
     x = np.zeros(1 + p + q)
@@ -35,13 +37,13 @@ def rolling_forecast_metrics(train_result, d):
     z_train = train_result['z_train']
     p = train_result['p']
     q = train_result['q']
-    H = train_result['H']
     results = []
-    for h in range(1, H + 1):
+    for h in [1, 3, 5]:
         if h not in models:
             continue
         theta_h = models[h]['theta']
         residuals_train = models[h]['residuals']
+        theta_m = models[h]['theta_m']
         y_pred_h = []
         y_real_h = []
         max_t = len(y_test) - h
@@ -51,7 +53,20 @@ def rolling_forecast_metrics(train_result, d):
                 z_hist = apply_differencing(np.array(y_hist, dtype=float), d).tolist()
             else:
                 z_hist = list(y_hist)
-            eps_hist = list(residuals_train)
+            # Calcular innovación MA dinámica para el paso actual
+            if q > 0:
+                m = len(theta_m) - 1
+                if len(z_hist) >= m:
+                    X_ar = np.zeros(m + 1)
+                    X_ar[0] = 1.0
+                    for i in range(1, m + 1):
+                        X_ar[i] = z_hist[-i]
+                    innov = z_hist[-1] - np.dot(X_ar, theta_m)
+                else:
+                    innov = 0.0
+                eps_hist = [innov]
+            else:
+                eps_hist = []
             x = build_features_rolling(z_hist, eps_hist, p, q)
             z_pred = np.dot(x, theta_h)
             if d > 0:
@@ -67,7 +82,7 @@ def rolling_forecast_metrics(train_result, d):
         y_real_h = np.array(y_real_h, dtype=float)
         mNSE_h = mnse(y_real_h, y_pred_h)
         MAPE_h = mape(y_real_h, y_pred_h)
-        jb_h = jarque_bera(residuals_train) if h in [1, 3, 5] else np.nan
+        jb_h = jarque_bera(residuals_train)
         results.append({
             'h': h,
             'mNSE_h': mNSE_h,
@@ -116,12 +131,12 @@ def main():
     print("="*70)
     print("PIPELINE COMPLETO: ADF -> TRN -> TST (Rolling Forecast)")
     print("="*70)
-    y = load_data('tseries.csv')
+    y = load_data()
     if len(y) == 0:
         return
     print(f"\n[1/3] Datos cargados: {len(y)} observaciones")
     print("\n[2/3] Entrenamiento Two-Phase OLS (conjunto TRAIN 80%)...")
-    train_result = train_model(y, p_max=10, q_max=10, H=12, m=20)
+    train_result = train_model(y, p_max=10, q_max=10)
     d = train_result['d']
     print(f"  → Parámetros óptimos: p={train_result['p']}, q={train_result['q']}, d={d}")
     print("\n[3/3] Rolling Forecast sobre TEST (sin data leakage)...")
