@@ -1,7 +1,18 @@
 __pycache__
 .venv
+
 utility.csv
 adf.csv
 train.csv
 test.csv
 
+acf_initial.png
+acf_residuos_h1.png
+acf_residuos_h3.png
+acf_residuos_h5.png
+
+plot_h1.png
+plot_h3.png
+plot_h5.png
+
+time_series.png
