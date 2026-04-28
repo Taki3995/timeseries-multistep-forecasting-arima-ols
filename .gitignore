@@ -1,18 +1,7 @@
-# GSD Framework
-.planning/
-get-shit-done/
-node_modules/
-.claude
-.gemini
-.github
-agents/
-gsd-file-manifest.json
 __pycache__
-prediccion.png
-.vscode
+.venv
 utility.csv
 adf.csv
 train.csv
 test.csv
 
-#!*
