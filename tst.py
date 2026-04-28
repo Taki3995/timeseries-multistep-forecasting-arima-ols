@@ -74,8 +74,12 @@ def run_testing(file_path):
     # Máximo horizonte que podemos predecir
     max_h = max(coefs.keys())
     
-    # Iterar "día a día" exclusivamente sobre el rango de Test
-    for t in range(train_idx, N_total - max_h):
+    # Definir la ventana estricta de evaluación para igualar el denominador del mNSE
+    target_start = train_idx + max_h
+    target_end = N_total
+    
+    # Iterar "día a día" asegurando que el origen permita predecir dentro de la ventana target
+    for t in range(target_start - max_h, target_end - 1):
         # Índices ajustados por la diferenciación 'd'
         t_z = t - d
         
@@ -96,15 +100,18 @@ def run_testing(file_path):
             # Predicción Directa en dominio diferenciado (z_t+h)
             z_pred = np.dot(x_t, weights)
             
-            # Recuperación Binomial usando el historial (que ahora incluye predicciones pasadas si h>1)
+            # Recuperación Binomial usando el historial
             y_pred_recup = utility.recover_prediction(z_pred, y_hist_recursivo, d)
             
             # Inyectar la predicción actual al historial para habilitar el siguiente horizonte sin fuga de datos
             y_hist_recursivo.append(y_pred_recup)
             
-            # Si el horizonte actual es uno de los que debemos reportar, guardarlo
-            if h in horizontes_reporte:
-                y_real = data[t + h]
+            # Índice real de la predicción
+            target_T = t + h
+            
+            # GUARDADO RESTRINGIDO: Solo registrar si cae en la ventana estandarizada compartida
+            if h in horizontes_reporte and target_start <= target_T < target_end:
+                y_real = data[target_T]
                 resultados_h[h]['real'].append(y_real)
                 resultados_h[h]['pred'].append(y_pred_recup)
                 resultados_h[h]['err'].append(y_real - y_pred_recup)
