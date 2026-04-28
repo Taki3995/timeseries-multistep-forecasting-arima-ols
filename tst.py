@@ -83,8 +83,8 @@ def run_testing(file_path):
         # Índices ajustados por la diferenciación 'd'
         t_z = t - d
         
-        # Historial original estricto: Todo lo que conoce el modelo hasta el día t
-        y_hist_recursivo = list(data[: t + 1])
+        # Historial original estricto: Todo lo que conoce el modelo hasta el día t, se mantiene FIJO
+        y_hist_fijo = list(data[: t + 1])
         
         # Extraer variables explicativas (Solo información del pasado t_z)
         z_feats = [Z[t_z - i] for i in range(p)] if p > 0 else []
@@ -100,11 +100,8 @@ def run_testing(file_path):
             # Predicción Directa en dominio diferenciado (z_t+h)
             z_pred = np.dot(x_t, weights)
             
-            # Recuperación Binomial usando el historial
-            y_pred_recup = utility.recover_prediction(z_pred, y_hist_recursivo, d)
-            
-            # Inyectar la predicción actual al historial para habilitar el siguiente horizonte sin fuga de datos
-            y_hist_recursivo.append(y_pred_recup)
+            # Recuperación Binomial usando el historial FIJO (sin append posterior)
+            y_pred_recup = utility.recover_prediction(z_pred, y_hist_fijo, d)
             
             # Índice real de la predicción
             target_T = t + h
