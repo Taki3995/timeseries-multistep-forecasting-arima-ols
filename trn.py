@@ -1,151 +1,173 @@
 import numpy as np
 import pandas as pd
-from utility import pinv_svd, read_d_from_adf, apply_differencing
+import utility
 
-def estimate_residuals(y, m):
-    n = len(y)
-    if n <= m:
-        raise ValueError(f"La longitud de la serie ({n}) debe ser mayor a m ({m}).")
-    n_obs = n - m
-    Y = y[m:]
-    X = np.zeros((n_obs, 1 + m))
-    X[:, 0] = 1.0
-    for i in range(1, m + 1):
-        X[:, i] = y[m - i : n - i]
-    theta = pinv_svd(X) @ Y
-    Y_pred = X @ theta
-    eps_hat = Y - Y_pred
-    residuals = np.zeros(n)
-    residuals[m:] = eps_hat
-    return residuals, theta
+# ==========================================
+# 1. TWO-PHASE OLS MATRICES
+# ==========================================
 
-def estimate_two_phase_model(z, eps_hat, p, q, H, theta_m):
-    n = len(z)
-    models = {}
-    max_lag = max(p, q) if p > 0 or q > 0 else 1
-    for h in range(1, H + 1):
-        t_start = max_lag
-        t_end = n - h
-        if t_end <= t_start:
-            raise ValueError(f"No hay suficientes datos para el horizonte {h} con lags p={p}, q={q}.")
-        n_obs = t_end - t_start
-        Y_target = z[t_start + h : t_end + h]
-        X = np.zeros((n_obs, 1 + p + q))
-        X[:, 0] = 1.0
-        for i in range(p):
-            X[:, 1 + i] = z[t_start - i : t_end - i]
-        for j in range(q):
-            X[:, 1 + p + j] = eps_hat[t_start - j : t_end - j]
-        theta_h = pinv_svd(X) @ Y_target
-        Y_pred = X @ theta_h
-        residuals = Y_target - Y_pred
-        sse = np.sum(residuals**2)
-        aic = n_obs * np.log(sse) + 2 * (1 + p + q)
-        models[h] = {
-            'theta': theta_h,
-            'sse': sse,
-            'aic': aic,
-            'residuals': residuals,
-            'theta_m': theta_m
-        }
-    return models
+def build_phase1_matrix(Z, m):
+    """
+    Construye las matrices para el proceso AR(m) largo.
+    Retorna X (rezagos de Z) y Y (Z actual).
+    """
+    N = len(Z)
+    X = np.zeros((N - m, m))
+    for i in range(m):
+        X[:, i] = Z[m - 1 - i : N - 1 - i]
+    Y = Z[m:]
+    return X, Y
 
-def grid_search_arima(z_train, p_max, q_max, H):
-    best_aic = float('inf')
-    best_p = 0
-    best_q = 0
-    best_models = None
-    best_eps_hat = None
-    n = len(z_train)
-    for p in range(0, p_max + 1):
-        for q in range(0, q_max + 1):
-            if (p + q) == 0:
+def build_phase2_matrix(Z, residuals, m, p, q, h):
+    """
+    Construye las matrices para la estimación Directa Multi-Step.
+    Target: Z_{t+h}
+    Regresores: Z_{t}, ..., Z_{t-p+1} y eps_{t}, ..., eps_{t-q+1}
+    """
+    N = len(Z)
+    
+    # residuals[0] corresponde al tiempo t = m en la serie Z
+    # Necesitamos al menos q-1 residuos pasados y p-1 valores de Z pasados
+    t_start = m + max(0, q - 1)
+    t_start = max(t_start, p - 1)
+    
+    # El tiempo t máximo que podemos usar para features es tal que t+h exista
+    t_end = N - 1 - h
+    
+    if t_start > t_end:
+        return np.array([]), np.array([]) # No hay suficientes datos
+        
+    X = []
+    Y = []
+    
+    for t in range(t_start, t_end + 1):
+        target = Z[t + h]
+        
+        ar_feats = [Z[t - i] for i in range(p)] if p > 0 else []
+        ma_feats = [residuals[t - i - m] for i in range(q)] if q > 0 else []
+        
+        X.append(ar_feats + ma_feats)
+        Y.append(target)
+        
+    return np.array(X), np.array(Y)
+
+# ==========================================
+# 2. MOTOR DE ENTRENAMIENTO
+# ==========================================
+
+def run_training(data, d):
+    """Ejecuta el Grid Search y entrena modelos independientes por horizonte."""
+    train_size = int(len(data) * 0.8)
+    y_train = data[:train_size]
+    
+    # Serie diferenciada
+    Z = utility.diff_series(y_train, d)
+    N = len(Z)
+    
+    best_aic = np.inf
+    best_p, best_q = 0, 0
+    
+    print("Iniciando Grid Search (p, q entre 0 y 10)... esto puede tardar un poco.")
+    
+    # ------------------------------------------
+    # GRID SEARCH: Buscando los mejores p y q usando el modelo h=1
+    # ------------------------------------------
+    for p in range(11):
+        for q in range(11):
+            if p == 0 and q == 0:
                 continue
+                
             m = (p + q) * 3
+            if m >= N - 5: # Prevenir desbordamiento de datos
+                continue
+                
+            # Fase 1: Estimación de innovaciones
+            X_p1, Y_p1 = build_phase1_matrix(Z, m)
             try:
-                eps_hat, theta_m = estimate_residuals(z_train, m)
-            except:
+                beta_p1 = np.linalg.inv(X_p1.T @ X_p1) @ X_p1.T @ Y_p1
+                residuals = Y_p1 - X_p1 @ beta_p1
+            except np.linalg.LinAlgError:
                 continue
-            max_lag_pq = max(p, q) if p > 0 or q > 0 else 1
-            h = 1
-            t_start = max_lag_pq
-            t_end = n - h
-            if t_end <= t_start:
+                
+            # Fase 2: Evaluación OLS para h=1
+            X_p2, Y_p2 = build_phase2_matrix(Z, residuals, m, p, q, h=1)
+            if len(Y_p2) < 5:
                 continue
-            n_obs = t_end - t_start
-            Y_target = z_train[t_start + h : t_end + h]
-            X = np.zeros((n_obs, 1 + p + q))
-            X[:, 0] = 1.0
-            for i in range(p):
-                X[:, 1 + i] = z_train[t_start - i : t_end - i]
-            for j in range(q):
-                X[:, 1 + p + j] = eps_hat[t_start - j : t_end - j]
-            theta_h1 = pinv_svd(X) @ Y_target
-            Y_pred = X @ theta_h1
-            sse = np.sum((Y_target - Y_pred)**2)
-            if sse <= 0:
+                
+            try:
+                beta_p2 = np.linalg.inv(X_p2.T @ X_p2) @ X_p2.T @ Y_p2
+                errors = Y_p2 - X_p2 @ beta_p2
+                sse = np.sum(errors**2)
+                
+                aic = utility.calc_aic(sse, len(Y_p2), p + q)
+                if aic < best_aic:
+                    best_aic = aic
+                    best_p = p
+                    best_q = q
+            except np.linalg.LinAlgError:
                 continue
-            aic = n_obs * np.log(sse) + 2 * (1 + p + q)
-            if aic < best_aic:
-                best_aic = aic
-                best_p = p
-                best_q = q
-                best_eps_hat = eps_hat
-    best_models = estimate_two_phase_model(z_train, best_eps_hat, best_p, best_q, H, theta_m)
-    return best_p, best_q, best_models, best_eps_hat, best_aic, theta_m
-
-def export_train_results(p, q, models, filepath='train.csv'):
-    rows = []
-    for h, model_data in sorted(models.items()):
-        theta = model_data['theta']
-        sse = model_data['sse']
-        aic = model_data['aic']
-        coef_str = ' '.join([f'{c:.6f}' for c in theta])
-        rows.append({
-            'h': h,
-            'p': p,
-            'q': q,
-            'coeficientes': coef_str,
-            'SSE': sse,
-            'AIC': aic
-        })
-    df = pd.DataFrame(rows)
-    df.to_csv(filepath, index=False)
-    print(f"Resultados de entrenamiento exportados a {filepath}")
-    return df
-
-def train_model(y, p_max=10, q_max=10):
-    y = np.asarray(y, dtype=float)
-    n = len(y)
-    n_train = int(0.8 * n)
-    y_train = y[:n_train]
-    y_test = y[n_train:]
-    print(f"Split Train/Test: {n_train} train (80%), {len(y_test)} test (20%)")
-    d = read_d_from_adf('adf.csv')
-    print(f"Orden de integración d={d} (desde adf.csv)")
-    z_train = apply_differencing(y_train, d)
-    print(f"Longitud de z_train después de d={d} diferenciaciones: {len(z_train)}")
-    best_p, best_q, models, residuals, best_aic, theta_m = grid_search_arima(z_train, p_max, q_max, H=5)
-    print(f"Mejores parámetros encontrados: p={best_p}, q={best_q}, AIC={best_aic:.4f}")
-    export_train_results(best_p, best_q, models, 'train.csv')
-    return {
-        'p': best_p,
-        'q': best_q,
-        'models': models,
-        'residuals': residuals,
-        'y_train': y_train,
-        'y_test': y_test,
-        'z_train': z_train,
-        'd': d,
-        'n_train': n_train,
-        'theta_m': theta_m
-    }
+                
+    print(f"[+] Grid Search completado. Óptimos: p={best_p}, q={best_q} (AIC: {best_aic:.4f})")
+    
+    # ------------------------------------------
+    # ESTIMACIÓN FINAL: Modelos independientes para h={1, 2, 3, 4, 5}
+    # ------------------------------------------
+    m_opt = (best_p + best_q) * 3
+    
+    # Recalculamos Fase 1 con el óptimo
+    X_p1, Y_p1 = build_phase1_matrix(Z, m_opt)
+    beta_p1 = np.linalg.inv(X_p1.T @ X_p1) @ X_p1.T @ Y_p1
+    residuals = Y_p1 - X_p1 @ beta_p1
+    
+    results = []
+    
+    # Guardar metadata
+    results.extend([
+        {'h': 0, 'type': 'meta', 'index': 'p', 'value': best_p},
+        {'h': 0, 'type': 'meta', 'index': 'd', 'value': d},
+        {'h': 0, 'type': 'meta', 'index': 'q', 'value': best_q},
+        {'h': 0, 'type': 'meta', 'index': 'm', 'value': m_opt}
+    ])
+    
+    # Iterar sobre horizontes (h)
+    for h in range(1, 6):
+        X_p2, Y_p2 = build_phase2_matrix(Z, residuals, m_opt, best_p, best_q, h)
+        if len(Y_p2) == 0:
+            print(f"[-] Advertencia: No hay suficientes datos para el horizonte h={h}")
+            continue
+            
+        beta_h = np.linalg.inv(X_p2.T @ X_p2) @ X_p2.T @ Y_p2
+        
+        # Separar coeficientes AR y MA y guardarlos
+        for i in range(best_p):
+            results.append({'h': h, 'type': 'AR', 'index': i+1, 'value': beta_h[i]})
+        for j in range(best_q):
+            results.append({'h': h, 'type': 'MA', 'index': j+1, 'value': beta_h[best_p + j]})
+            
+    # Guardar la persistencia de los modelos
+    df_train = pd.DataFrame(results)
+    df_train.to_csv('train.csv', index=False)
+    print("\nParámetros de los modelos guardados en 'train.csv'.")
 
 if __name__ == '__main__':
+    # 1. Cargar Data Original
+    file_path = 'ts_taller2.csv' 
+    df = pd.read_csv(file_path, header=None)
+    data = df[0].values
+    
+    # 2. Cargar 'd' de la fase anterior
     try:
-        from tst import load_data
-        y = load_data()
-        train_result = train_model(y, p_max=10, q_max=10)
-        print("Entrenamiento completado.")
-    except Exception as e:
-        print(f"Error: {e}")
+        df_adf = pd.read_csv('adf.csv')
+        # Buscar la primera fila donde la serie sea estacionaria
+        estacionarios = df_adf[df_adf['is_stationary'] == True]
+        if not estacionarios.empty:
+            d_opt = int(estacionarios.iloc[0]['d'])
+        else:
+            # Si ninguna lo fue, usamos el mayor evaluado
+            d_opt = int(df_adf['d'].max()) 
+    except FileNotFoundError:
+        print("No se encontró adf.csv. Por favor, ejecuta adf.py primero.")
+        exit()
+        
+    print(f"Usando orden de integración d={d_opt}")
+    run_training(data, d_opt)
