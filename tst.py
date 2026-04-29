@@ -149,6 +149,7 @@ def run_testing(file_path):
         plt.title(f'Test ARIMA - Horizonte h = {h}')
         plt.grid(True, alpha=0.5)
         plt.legend()
+        plt.xlim(left=0)
         plt.savefig(f'plot_h{h}.png')
         plt.close()
         

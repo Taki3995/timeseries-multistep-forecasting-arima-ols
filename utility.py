@@ -177,6 +177,8 @@ def plot_acf(y, max_lag=20, title="Sample Autocorrelation Function", filename="a
     plt.ylabel('Sample Autocorrelation')
     plt.grid(True, alpha=0.4)
     plt.xlim(0, max_lag + 0.5)
+    plt.ylim(-0.4, 1.0) 
+    plt.yticks([-0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
     
     plt.savefig(filename)
     plt.close()
