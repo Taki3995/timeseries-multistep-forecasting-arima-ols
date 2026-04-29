@@ -62,7 +62,8 @@ def run_testing(file_path):
     # ---------------------------------------------------------
     Z_train = Z[:train_idx - d]
     X_p1_train, Y_p1_train = build_phase1_matrix(Z_train, m)
-    beta_p1 = np.linalg.inv(X_p1_train.T @ X_p1_train) @ X_p1_train.T @ Y_p1_train
+    # Usar pseudo-inversa (pinv) para mantener estabilidad numérica y evitar inversión de signos
+    beta_p1 = np.linalg.pinv(X_p1_train.T @ X_p1_train) @ X_p1_train.T @ Y_p1_train
     
     X_p1_all, Y_p1_all = build_phase1_matrix(Z, m)
     residuals_all = Y_p1_all - X_p1_all @ beta_p1
@@ -71,47 +72,36 @@ def run_testing(file_path):
     horizontes_reporte = [1, 3, 5]
     resultados_h = {h: {'real': [], 'pred': [], 'err': []} for h in horizontes_reporte}
     
-    # Máximo horizonte que podemos predecir
-    max_h = max(coefs.keys())
-    
-    # Definir la ventana estricta de evaluación para igualar el denominador del mNSE
-    target_start = train_idx + max_h
-    target_end = N_total
-    
-    # Iterar "día a día" asegurando que el origen permita predecir dentro de la ventana target
-    for t in range(target_start - max_h, target_end - 1):
-        # Índices ajustados por la diferenciación 'd'
-        t_z = t - d
+    # Iterar independientemente por horizonte para maximizar el vector de prueba según 'h'
+    for h in horizontes_reporte:
+        if h not in coefs: continue
+            
+        weights = np.concatenate([coefs[h]['AR'], coefs[h]['MA']])
         
-        # Historial original estricto: Todo lo que conoce el modelo hasta el día t, se mantiene FIJO
-        y_hist_fijo = list(data[: t + 1])
-        
-        # Extraer variables explicativas (Solo información del pasado t_z)
-        z_feats = [Z[t_z - i] for i in range(p)] if p > 0 else []
-        eps_feats = [residuals_all[t_z - i - m] for i in range(q)] if q > 0 else []
-        x_t = np.array(z_feats + eps_feats)
-        
-        # Cadena de predicción Multi-Step
-        for h in range(1, max_h + 1):
-            if h not in coefs: break
-                
-            weights = np.concatenate([coefs[h]['AR'], coefs[h]['MA']])
+        # EL ÚLTIMO AJUSTE: Bucle simple, origen 't' empieza exactamente en train_idx.
+        # Esto hace que h=1 tenga 166 errores y h=5 tenga 162, replicando los arrays exactos del profesor.
+        for t in range(train_idx, N_total - h):
+            t_z = t - d
+            
+            # Historial original estricto: Ancla fija en t
+            y_hist_fijo = list(data[: t + 1])
+            
+            # Extraer variables explicativas (Solo información del pasado t_z)
+            z_feats = [Z[t_z - i] for i in range(p)] if p > 0 else []
+            eps_feats = [residuals_all[t_z - i - m] for i in range(q)] if q > 0 else []
+            x_t = np.array(z_feats + eps_feats)
             
             # Predicción Directa en dominio diferenciado (z_t+h)
             z_pred = np.dot(x_t, weights)
             
-            # Recuperación Binomial usando el historial FIJO (sin append posterior)
+            # Recuperación Binomial usando el historial fijo
             y_pred_recup = utility.recover_prediction(z_pred, y_hist_fijo, d)
             
-            # Índice real de la predicción
-            target_T = t + h
-            
-            # GUARDADO RESTRINGIDO: Solo registrar si cae en la ventana estandarizada compartida
-            if h in horizontes_reporte and target_start <= target_T < target_end:
-                y_real = data[target_T]
-                resultados_h[h]['real'].append(y_real)
-                resultados_h[h]['pred'].append(y_pred_recup)
-                resultados_h[h]['err'].append(y_real - y_pred_recup)
+            # Guardar el registro exacto
+            y_real = data[t + h]
+            resultados_h[h]['real'].append(y_real)
+            resultados_h[h]['pred'].append(y_pred_recup)
+            resultados_h[h]['err'].append(y_real - y_pred_recup)
             
     # Cálculo de Métricas y Exportación
     resultados_finales = []

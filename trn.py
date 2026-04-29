@@ -84,7 +84,8 @@ def run_training(data, d):
             # Fase 1: Estimación de innovaciones
             X_p1, Y_p1 = build_phase1_matrix(Z, m)
             try:
-                beta_p1 = np.linalg.inv(X_p1.T @ X_p1) @ X_p1.T @ Y_p1
+                # Usar pseudo-inversa (pinv) para estabilidad numérica
+                beta_p1 = np.linalg.pinv(X_p1.T @ X_p1) @ X_p1.T @ Y_p1
                 residuals = Y_p1 - X_p1 @ beta_p1
             except np.linalg.LinAlgError:
                 continue
@@ -95,7 +96,8 @@ def run_training(data, d):
                 continue
                 
             try:
-                beta_p2 = np.linalg.inv(X_p2.T @ X_p2) @ X_p2.T @ Y_p2
+                # Usar pseudo-inversa (pinv) para estabilidad numérica
+                beta_p2 = np.linalg.pinv(X_p2.T @ X_p2) @ X_p2.T @ Y_p2
                 errors = Y_p2 - X_p2 @ beta_p2
                 sse = np.sum(errors**2)
                 
@@ -122,9 +124,9 @@ def run_training(data, d):
     # ------------------------------------------
     m_opt = (best_p + best_q) * 3
     
-    # Recalculamos Fase 1 con el óptimo
+    # Recalculamos Fase 1 con el óptimo (usando pinv)
     X_p1, Y_p1 = build_phase1_matrix(Z, m_opt)
-    beta_p1 = np.linalg.inv(X_p1.T @ X_p1) @ X_p1.T @ Y_p1
+    beta_p1 = np.linalg.pinv(X_p1.T @ X_p1) @ X_p1.T @ Y_p1
     residuals = Y_p1 - X_p1 @ beta_p1
     
     results = []
@@ -144,7 +146,8 @@ def run_training(data, d):
             print(f"[-] Advertencia: No hay suficientes datos para el horizonte h={h}")
             continue
             
-        beta_h = np.linalg.inv(X_p2.T @ X_p2) @ X_p2.T @ Y_p2
+        # Usar pseudo-inversa (pinv)
+        beta_h = np.linalg.pinv(X_p2.T @ X_p2) @ X_p2.T @ Y_p2
         
         # Separar coeficientes AR y MA y guardarlos
         for i in range(best_p):
